@@ -115,3 +115,20 @@ Notas:
 - Se o VAD não detectar voz, o script avisa e cai para transcrição completa.
 - Você pode combinar com `--beam-size 8` e modelos maiores (`medium`, `large-v3`) para melhor qualidade.
 - A transcrição em português melhora com modelos maiores.
+
+## Modo Interativo (Menu)
+
+Se preferir configurar as opções interativamente e informar os arquivos depois:
+
+```bash
+./.venv/bin/python transcrever.py --menu
+```
+
+No menu você pode definir:
+- Formato (`srt`/`txt`)
+- Idioma (ou detecção automática)
+- Modelo (`tiny`, `base`, `small`, `medium`, `large-v3` ou caminho para `.bin`)
+- Beam size, RTF, manter marcadores, ativar VAD
+- Caminhos dos arquivos (separados por vírgula ou espaço)
+
+O modo interativo executa a transcrição com as opções escolhidas e exibe o progresso.

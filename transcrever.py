@@ -70,8 +70,23 @@ def baixar_modelo(modelo: str, pasta_modelos: Path) -> Path:
         return Path(modelo)
 
     destino = pasta_modelos / nome_arquivo
+    # Se o arquivo "novo" existe mas é muito pequeno (stub), não usar
     if destino.exists():
-        return destino
+        try:
+            if destino.stat().st_size >= 10 * 1024 * 1024:  # >10MB deve ser um binário real
+                return destino
+            else:
+                console.print(
+                    f"[yellow]Modelo '{destino.name}' parece inválido/placeholder (tamanho {destino.stat().st_size} bytes). Tentando fallback...[/]"
+                )
+                # Remove stub para permitir novo download
+                try:
+                    destino.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            # Em caso de erro ao checar, prossegue com fallback
+            pass
     # Fallback: se existir arquivo antigo, usar
     antigo = None
     if modelo in MODEL_MAP_OLD:
@@ -79,10 +94,15 @@ def baixar_modelo(modelo: str, pasta_modelos: Path) -> Path:
         if possivel_antigo.exists():
             antigo = possivel_antigo
     if antigo:
-        console.print(
-            f"[yellow]Usando modelo antigo encontrado:[/] {antigo} (pode causar incompatibilidades)"
-        )
-        return antigo
+        try:
+            if antigo.stat().st_size >= 10 * 1024 * 1024:
+                console.print(
+                    f"[yellow]Usando modelo antigo encontrado:[/] {antigo} (pode causar incompatibilidades)"
+                )
+                return antigo
+        except Exception:
+            pass
+    
 
     # Tenta via huggingface_hub (mais robusto)
     console.print(f"Baixando modelo: [cyan]{modelo}[/] -> {destino}")
@@ -96,6 +116,16 @@ def baixar_modelo(modelo: str, pasta_modelos: Path) -> Path:
             local_dir=pasta_modelos.as_posix(),
             local_dir_use_symlinks=False,
         )
+        # Verifica tamanho para evitar arquivo placeholder
+        try:
+            if os.path.getsize(downloaded_path) < 10 * 1024 * 1024:
+                console.print(
+                    f"[yellow]Download via HuggingFace retornou arquivo muito pequeno ({os.path.getsize(downloaded_path)} bytes). Tentando mirrors alternativos...[/]"
+                )
+                raise RuntimeError("Arquivo de modelo inválido (tamanho pequeno)")
+        except Exception:
+            # força fallback para mirrors
+            raise
         return Path(downloaded_path)
     except Exception as e:
         # Fallback para urllib com mirror direto
@@ -108,6 +138,15 @@ def baixar_modelo(modelo: str, pasta_modelos: Path) -> Path:
             try:
                 with urllib.request.urlopen(url) as resp, open(destino, "wb") as out:
                     shutil.copyfileobj(resp, out)
+                # Verifica tamanho após download
+                try:
+                    if destino.stat().st_size < 10 * 1024 * 1024:
+                        console.print(
+                            f"[red]Modelo baixado de {url} ainda parece inválido (tamanho muito pequeno).[/]"
+                        )
+                        continue
+                except Exception:
+                    continue
                 return destino
             except Exception:
                 continue
@@ -620,8 +659,8 @@ def parse_args():
     )
     p.add_argument(
         "arquivos",
-        nargs="+",
-        help="Caminho(s) dos arquivo(s) de áudio/vídeo (mp3, m4a, wav, mp4, etc.)",
+        nargs="*",
+        help="Caminho(s) dos arquivo(s) de áudio/vídeo (mp3, m4a, wav, mp4, etc.). No modo --menu, serão solicitados interativamente.",
     )
     p.add_argument(
         "--modelo",
@@ -666,6 +705,11 @@ def parse_args():
         action="store_true",
         help="Ativa VAD (detecção de voz) para transcrever somente trechos com fala e reduzir música/ruído.",
     )
+    p.add_argument(
+        "--menu",
+        action="store_true",
+        help="Inicia modo interativo com menu para escolher opções e arquivos.",
+    )
     return p.parse_args()
 
 
@@ -685,6 +729,104 @@ def main():
         sys.exit(1)
 
     args = parse_args()
+
+    def menu_interativo():
+        console.print("[bold cyan]Modo interativo[/] — selecione as opções abaixo.")
+        # Formato
+        formato = "srt"
+        resp = input("Formato de saída (srt/txt) [srt]: ").strip().lower()
+        if resp in {"srt", "txt"}:
+            formato = resp
+
+        # Idioma
+        idioma = None
+        resp = input("Idioma forçado (ex.: pt) [auto]: ").strip().lower()
+        if resp:
+            idioma = resp
+
+        # Modelo
+        modelo = "small"
+        console.print("Modelos: tiny, base, small, medium, large-v3 ou caminho para .bin")
+        resp = input("Modelo [small]: ").strip()
+        if resp:
+            modelo = resp
+
+        # Beam size
+        beam_size = 5
+        resp = input("Beam size [5]: ").strip()
+        if resp:
+            try:
+                beam_size = int(resp)
+            except Exception:
+                console.print("[yellow]Valor inválido para beam size; usando 5.[/]")
+
+        # RTF
+        rtf = 1.0
+        resp = input("RTF estimado (ex.: 2.0) [1.0]: ").strip()
+        if resp:
+            try:
+                rtf = float(resp)
+            except Exception:
+                console.print("[yellow]Valor inválido para RTF; usando 1.0.[/]")
+
+        # Manter marcadores
+        manter_marcadores = False
+        resp = input("Manter marcadores ([Música], etc.)? (s/N) [N]: ").strip().lower()
+        if resp in {"s", "sim", "y", "yes"}:
+            manter_marcadores = True
+
+        # VAD
+        usar_vad = False
+        resp = input("Ativar VAD (detecção de voz)? (s/N) [N]: ").strip().lower()
+        if resp in {"s", "sim", "y", "yes"}:
+            usar_vad = True
+
+        # Arquivos
+        console.print("Informe caminho(s) dos arquivos separados por vírgula ou espaço.")
+        resp = input("Arquivos: ").strip()
+        if not resp:
+            raise RuntimeError("Nenhum arquivo informado.")
+        # split por vírgula e/ou espaço
+        partes = [p for chunk in resp.split(",") for p in chunk.split()] 
+        arquivos = [p for p in partes if p]
+
+        console.print("\n[bold]Resumo:[/]")
+        console.print(f"Formato: {formato}")
+        console.print(f"Idioma: {idioma if idioma else 'auto'}")
+        console.print(f"Modelo: {modelo}")
+        console.print(f"Beam size: {beam_size}")
+        console.print(f"RTF: {rtf}")
+        console.print(f"Manter marcadores: {manter_marcadores}")
+        console.print(f"VAD: {usar_vad}")
+        console.print(f"Arquivos: {', '.join(arquivos)}")
+        conf = input("Confirmar e transcrever? (S/n) [S]: ").strip().lower()
+        if conf in {"n", "nao", "não", "no"}:
+            console.print("[yellow]Cancelado pelo usuário.[/]")
+            sys.exit(0)
+
+        for caminho in arquivos:
+            saida = transcrever_arquivo(
+                arquivo=caminho,
+                modelo=modelo,
+                idioma=idioma,
+                formato=formato,
+                saida_dir=args.saida,
+                beam_size=beam_size,
+                rtf=rtf,
+                manter_marcadores=manter_marcadores,
+                usar_vad=usar_vad,
+            )
+            posprocessar_saida(saida, formato, manter_marcadores)
+            console.print(f"✅ Arquivo transcrito: [bold]{saida}[/bold]")
+
+    # Se modo menu ou nenhum arquivo passado, abrir menu
+    if args.menu or not args.arquivos:
+        try:
+            menu_interativo()
+            return
+        except Exception as e:
+            console.print(f"[red]Erro no modo interativo:[/] {e}")
+            sys.exit(2)
 
     try:
         for caminho in args.arquivos:
