@@ -1,0 +1,41 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# macOS
+.DS_Store
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Models: keep script, ignore binaries and caches
+models/*
+!models/download-ggml-model.sh
+
+# Media: do not track source audio/video files
+*.mp3
+*.mp4
+*.m4a
+*.wav
+*.flac
+*.aac
+*.ogg
+*.wma
+*.mov
+*.mkv
+*.webm
+
+# Optional: ignore intermediate VAD segment outputs (final SRT/TXT remain tracked)
+transcricoes/*.seg*.srt
+transcricoes/*.seg*.txt
